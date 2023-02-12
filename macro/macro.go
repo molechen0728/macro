@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"go/ast"
 	"gss"
+	"io/ioutil"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
 )
 
-type Node struct {
+type AtVisitor struct {
 	PkgName  string
 	Pos, End int
 	gss.FuncMetaData
@@ -19,13 +21,13 @@ type Node struct {
 	noAlign   bool
 }
 
-func (n *Node) Fast(f *ast.File) {
+func (a *AtVisitor) Fast(f *ast.File) {
 	for _, d := range f.Decls {
 		if gd, ok := d.(*ast.GenDecl); ok {
 			for _, s := range gd.Specs {
 				switch t := s.(type) {
 				case *ast.ImportSpec:
-					n.parseImport(t)
+					a.parseImport(t)
 				case *ast.TypeSpec:
 					if st, ok := t.Type.(*ast.StructType); ok {
 						m := map[string]struct{}{}
@@ -34,7 +36,7 @@ func (n *Node) Fast(f *ast.File) {
 								m[i2.Name] = struct{}{}
 							}
 						}
-						n.StructMap[t.Name.Name] = m
+						a.StructMap[t.Name.Name] = m
 					}
 				}
 			}
@@ -42,24 +44,24 @@ func (n *Node) Fast(f *ast.File) {
 
 		if fd, ok := d.(*ast.FuncDecl); ok {
 			if fd.Recv == nil {
-				n.parseFunDecl(fd)
+				a.parseFunDecl(fd)
 				break
 			}
 
 			f := fd.Recv.List[0]
-			if m, ok := n.StructMap[f.Type.(*ast.Ident).Name]; ok {
-				n.parseMethodDecl(fd, m)
+			if m, ok := a.StructMap[f.Type.(*ast.Ident).Name]; ok {
+				a.parseMethodDecl(fd, m)
 			}
 		}
 	}
 }
 
-func (n *Node) Visit(node ast.Node) ast.Visitor {
+func (a *AtVisitor) Visit(node ast.Node) ast.Visitor {
 
 	switch t := node.(type) {
 	case *ast.File:
-		n.PkgName = t.Name.Name
-		n.Fast(t)
+		a.PkgName = t.Name.Name
+		a.Fast(t)
 		// case *ast.ImportSpec:
 		// 	n.parseImport(t)
 		// case *ast.TypeSpec:
@@ -84,16 +86,16 @@ func (n *Node) Visit(node ast.Node) ast.Visitor {
 		// 	}
 	}
 
-	return n
+	return a
 }
 
-func (n *Node) parseImport(node *ast.ImportSpec) {
+func (a *AtVisitor) parseImport(node *ast.ImportSpec) {
 	if node.Path.Value == `"gss"` {
-		n.noAlign = true
+		a.noAlign = true
 	}
 }
 
-func (n *Node) parseMethodDecl(node *ast.FuncDecl, m map[string]struct{}) {
+func (a *AtVisitor) parseMethodDecl(node *ast.FuncDecl, m map[string]struct{}) {
 	s := node.Body.List[0]
 	if es, ok := s.(*ast.ExprStmt); ok {
 		if ce, ok := es.X.(*ast.CallExpr); ok {
@@ -144,14 +146,14 @@ func (n *Node) parseMethodDecl(node *ast.FuncDecl, m map[string]struct{}) {
 							}
 						}
 					}
-					n.Smd[k] = smd
+					a.Smd[k] = smd
 				}
 			}
 		}
 	}
 }
 
-func (n *Node) parseFunDecl(node *ast.FuncDecl) {
+func (a *AtVisitor) parseFunDecl(node *ast.FuncDecl) {
 
 	for _, s := range node.Body.List {
 		if es, ok := s.(*ast.ExprStmt); ok {
@@ -165,8 +167,8 @@ func (n *Node) parseFunDecl(node *ast.FuncDecl) {
 						return
 					}
 
-					n.Pos = int(es.Pos())
-					n.End = int(es.End())
+					a.Pos = int(es.Pos())
+					a.End = int(es.End())
 
 					if len(ce.Args) != 1 {
 						return
@@ -182,7 +184,7 @@ func (n *Node) parseFunDecl(node *ast.FuncDecl) {
 
 					for _, e := range cl.Elts {
 						kv := e.(*ast.KeyValueExpr)
-						n.kv(kv.Key, kv.Value)
+						a.kv(kv.Key, kv.Value)
 					}
 				}
 			}
@@ -190,11 +192,11 @@ func (n *Node) parseFunDecl(node *ast.FuncDecl) {
 	}
 }
 
-func (n *Node) kv(k, v ast.Expr) {
+func (a *AtVisitor) kv(k, v ast.Expr) {
 
 	name := k.(*ast.Ident).Name
 	if name == "Name" {
-		n.Name = v.(*ast.BasicLit).Value
+		a.Name = v.(*ast.BasicLit).Value
 	}
 
 	if name == "Requires" {
@@ -202,31 +204,31 @@ func (n *Node) kv(k, v ast.Expr) {
 			return
 		}
 		for _, e := range v.(*ast.CompositeLit).Elts {
-			if n.Requires == nil {
-				n.Requires = make([]string, 0)
+			if a.Requires == nil {
+				a.Requires = make([]string, 0)
 			}
-			n.Requires = append(n.Requires, e.(*ast.BasicLit).Value)
+			a.Requires = append(a.Requires, e.(*ast.BasicLit).Value)
 		}
 	}
 
 	if name == "Hidden" {
 		if v.(*ast.Ident).String() == "true" {
-			n.Hidden = true
+			a.Hidden = true
 		} else {
-			n.Hidden = false
+			a.Hidden = false
 		}
 	}
 
 	if name == "DelayInmillis" {
 		i, _ := strconv.ParseInt(v.(*ast.BasicLit).Value, 10, 64)
-		n.DelayInmillis = int(i)
+		a.DelayInmillis = int(i)
 	}
 }
 
-func (n Node) String() string {
+func (a AtVisitor) String() string {
 
 	var buf bytes.Buffer
-	for k, smd := range n.Smd {
+	for k, smd := range a.Smd {
 		buf.WriteString(fmt.Sprintf("\n     %s: {\n               Name: %s, \n               No: %d, \n               Mutable: %v\n      }", k, smd.Name, smd.No, smd.Mutable))
 	}
 
@@ -237,8 +239,132 @@ func (n Node) String() string {
 		"Hidden: %v\n"+
 		"DelayInmillis: %d\n"+
 		"Smd: %v",
-		n.PkgName, n.Pos, n.End, n.Name, n.Requires, n.Hidden, n.DelayInmillis, buf.String(),
+		a.PkgName, a.Pos, a.End, a.Name, a.Requires, a.Hidden, a.DelayInmillis, buf.String(),
 	)
+}
+
+type GenErrorRetrunVisitor struct {
+	Lines []struct {
+		Tpl  string
+		Line []int
+	}
+}
+
+func (g *GenErrorRetrunVisitor) Visit(node ast.Node) ast.Visitor {
+	switch t := node.(type) {
+	case *ast.FuncDecl:
+		g.visitFuncDecl(t)
+	}
+	return g
+}
+
+func (g *GenErrorRetrunVisitor) visitFuncDecl(fd *ast.FuncDecl) {
+	var tpl = `
+if %s != nil {
+	return %s
+}`
+	var ret string
+	if fd.Type.Results != nil {
+		for i, f := range fd.Type.Results.List {
+			switch f.Type.(*ast.Ident).Name {
+			case "error":
+				ret += "%s,"
+			}
+			if i == len(fd.Type.Results.List)-1 {
+				ret = strings.TrimRight(ret, ",")
+			}
+		}
+	}
+
+	var erri *ast.Ident
+	var iline = struct {
+		Tpl  string
+		Line []int
+	}{
+		Line: make([]int, 0, 10),
+	}
+
+	for _, s := range fd.Body.List {
+		switch t := s.(type) {
+		case *ast.AssignStmt:
+			if erri == nil {
+				break
+			}
+			for _, e := range t.Lhs {
+				i, ok := e.(*ast.Ident)
+				if ok {
+					if i.Name == erri.Name {
+						iline.Line = append(iline.Line, int(t.End()))
+					}
+				}
+			}
+		case *ast.DeclStmt:
+			gd, ok := t.Decl.(*ast.GenDecl)
+			if !ok {
+				break
+			}
+
+			if len(gd.Specs) != 1 {
+				break
+			}
+
+			vs, ok := gd.Specs[0].(*ast.ValueSpec)
+			if !ok {
+				break
+			}
+
+			se, ok := vs.Type.(*ast.SelectorExpr)
+			if !ok {
+				break
+			}
+
+			if se.X.(*ast.Ident).Name != "gss" || se.Sel.Name != "IfErrorNotNilReturn" {
+				break
+			}
+
+			if len(vs.Names) != 1 {
+				break
+			}
+
+			erri = vs.Names[0]
+			if ret != "" {
+				ret = fmt.Sprintf(ret, erri)
+			}
+
+			iline.Tpl = fmt.Sprintf(tpl, erri, ret)
+		}
+	}
+	if iline.Tpl != "" {
+		g.Lines = append(g.Lines, iline)
+	}
+}
+
+func (g *GenErrorRetrunVisitor) Replace(old, new string) {
+	bs, _ := ioutil.ReadFile(old)
+	s := string(bs)
+
+	var offset = 0
+
+	for _, v := range g.Lines {
+		for _, v2 := range v.Line {
+			left := s[:v2+offset-1]
+			right := s[v2+offset-1:]
+			s = left + v.Tpl + right
+			offset += len(v.Tpl)
+		}
+	}
+	ioutil.WriteFile(new, []byte(s), os.ModePerm)
+}
+
+func (g GenErrorRetrunVisitor) String() string {
+	var buf bytes.Buffer
+	for _, v := range g.Lines {
+		for _, v2 := range v.Line {
+			buf.WriteString(strconv.FormatInt(int64(v2), 10) + ",")
+		}
+		buf.WriteString(v.Tpl + "\n")
+	}
+	return buf.String()
 }
 
 func tof(i any) {

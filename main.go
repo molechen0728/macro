@@ -16,12 +16,18 @@ func main() {
 		panic(err)
 	}
 
-	n := macro.Node{
+	a := macro.AtVisitor{
 		Smd:       make(map[string]gss.StructMetaData),
 		StructMap: map[string]map[string]struct{}{},
 	}
 
-	ast.Walk(&n, f)
-	fmt.Printf("%v\n", n)
+	ast.Walk(&a, f)
+	fmt.Printf("%v\n", a)
 
+	g := macro.GenErrorRetrunVisitor{}
+
+	ast.Walk(&g, f)
+	fmt.Println(g)
+
+	g.Replace("test.go", "test.test.go")
 }
